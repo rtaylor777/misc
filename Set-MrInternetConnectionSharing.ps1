@@ -1,117 +1,99 @@
-#Requires -Version 3.0 -Modules NetAdapter
-function Set-MrInternetConnectionSharing {
-
-<#
-.SYNOPSIS
-    Configures Internet connection sharing for the specified network adapter(s).
-
-.DESCRIPTION
-    Set-MrInternetConnectionSharing is an advanced function that configures Internet connection sharing
-    for the specified network adapter(s). The specified network adapter(s) must exist and must be enabled.
-    To enable Internet connection sharing, Internet connection sharing cannot already be enabled on any
-    network adapters.
-
-.PARAMETER InternetInterfaceName
-    The name of the network adapter to enable or disable Internet connection sharing for.
-
- .PARAMETER LocalInterfaceName
-    The name of the network adapter to share the Internet connection with.
-
- .PARAMETER Enabled
-    Boolean value to specify whether to enable or disable Internet connection sharing.
-
-.EXAMPLE
-    Set-MrInternetConnectionSharing -InternetInterfaceName Ethernet -LocalInterfaceName 'Internal Virtual Switch' -Enabled $true
-
-.EXAMPLE
-    'Ethernet' | Set-MrInternetConnectionSharing -LocalInterfaceName 'Internal Virtual Switch' -Enabled $false
-
-.EXAMPLE
-    Get-NetAdapter -Name Ethernet | Set-MrInternetConnectionSharing -LocalInterfaceName 'Internal Virtual Switch' -Enabled $true
-
-.INPUTS
-    String
-
-.OUTPUTS
-    PSCustomObject
-
-.NOTES
-    Author:  Mike F Robbins
-    Website: http://mikefrobbins.com
-    Twitter: @mikefrobbins
-#>
-
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory,
-                   ValueFromPipeline,
-                   ValueFromPipelineByPropertyName)]
-        [ValidateScript({
-            If ((Get-NetAdapter -Name $_ -ErrorAction SilentlyContinue -OutVariable INetNIC) -and (($INetNIC).Status -ne 'Disabled' -or ($INetNIC).Status -ne 'Not Present')) {
-                $True
-            }
-            else {
-                Throw "$_ is either not a valid network adapter of it's currently disabled."
-            }
-        })]
-        [Alias('Name')]
-        [string]$InternetInterfaceName,
-
-        [ValidateScript({
-            If ((Get-NetAdapter -Name $_ -ErrorAction SilentlyContinue -OutVariable LocalNIC) -and (($LocalNIC).Status -ne 'Disabled' -or ($INetNIC).Status -ne 'Not Present')) {
-                $True
-            }
-            else {
-                Throw "$_ is either not a valid network adapter of it's currently disabled."
-            }
-        })]
-        [string]$LocalInterfaceName,
-
-        [Parameter(Mandatory)]
-        [bool]$Enabled
-    )
-
-    BEGIN {
-        if ((Get-NetAdapter | Get-MrInternetConnectionSharing).SharingEnabled -contains $true -and $Enabled) {
-            Write-Warning -Message 'Unable to continue due to Internet connection sharing already being enabled for one or more network adapters.'
-            Break
-        }
-
-        regsvr32.exe /s hnetcfg.dll
-        $netShare = New-Object -ComObject HNetCfg.HNetShare
-    }
-
-    PROCESS {
-
-        $publicConnection = $netShare.EnumEveryConnection |
-        Where-Object {
-            $netShare.NetConnectionProps.Invoke($_).Name -eq $InternetInterfaceName
-        }
-
-        $publicConfig = $netShare.INetSharingConfigurationForINetConnection.Invoke($publicConnection)
-
-        if ($PSBoundParameters.LocalInterfaceName) {
-            $privateConnection = $netShare.EnumEveryConnection |
-            Where-Object {
-                $netShare.NetConnectionProps.Invoke($_).Name -eq $LocalInterfaceName
-            }
-
-            $privateConfig = $netShare.INetSharingConfigurationForINetConnection.Invoke($privateConnection)
-        }
-
-        if ($Enabled) {
-            $publicConfig.EnableSharing(0)
-            if ($PSBoundParameters.LocalInterfaceName) {
-                $privateConfig.EnableSharing(1)
-            }
-        }
-        else {
-            $publicConfig.DisableSharing()
-            if ($PSBoundParameters.LocalInterfaceName) {
-                $privateConfig.DisableSharing()
-            }
-        }
-
-    }
-
+# Lets test if we can add some firewall rules successfully. 
+# first clean up matching rules
+$fwoutput=netsh advfirewall firewall delete rule name="Allow source 198.51.100.0/24 in through firewall"
+$fwoutput=netsh advfirewall firewall delete rule name="Allow dest 198.51.100.0/24 out through firewall"
+# then add the rules
+$fwoutput=netsh advfirewall firewall add rule name="Allow source 198.51.100.0/24 in through firewall" dir=in action=allow protocol=ANY remoteip=198.51.100.0/24
+if ($LastExitCode){
+	Write-Host "Please right click on the script and select Run as administrator"
+	Write-Host
+	exit
+}	
+$fwoutput=netsh advfirewall firewall add rule name="Allow dest 198.51.100.0/24 out through firewall" dir=out action=allow protocol=ANY remoteip=198.51.100.0/24
+if ($LastExitCode){
+	Write-Host "Please right click on the script and select Run as administrator"
+	Write-Host
+	exit
+}
+# Change directory to a temp directory indicated by the environment variable
+$tempDir=(Get-Childitem -path env:TEMP|select value|Format-Table -HideTableHeaders | Out-String).trim()
+cd $tempDir
+# Make a child directory that doesn't exist
+$newLeaf=[guid]::NewGuid()
+$newPath=$tempDir+'\'+$newLeaf
+if ( -not (Test-Path -Path $newPath) ){
+	Try {
+		$mkdirresult=mkdir $newLeaf
+	}
+	Catch {
+		Write-Host "Directory creation failed, probably TEMP directory is not writable"
+	}
+}
+if (Test-Path -Path $newPath){
+	# Change into this new directory
+	cd $newLeaf
+	# set $filename variable to current directory
+	$filename=(pwd|select Path|Format-Table -HideTableHeaders | Out-String).trim()
+	# add desired output file name to the full path in $filename variable
+	$filename+='\OpenVPN-2.6.5-I001-amd64.msi'
+	# download OpenVPN file to $filename
+	(new-object System.Net.WebClient).DownloadFile('https://swupdate.openvpn.org/community/releases/OpenVPN-2.6.5-I001-amd64.msi',$filename)
+	# Test that the downloaded file exists
+	if (Test-Path -Path $filename){
+		#Download successful
+		# If OpenVPN adapter is missing, attempt to install OpenVPN
+		try { 
+				$OpenVPNStatus=Get-NetAdapter -Name 'OpenVPN Data Channel Offload' -ErrorAction Stop |Select Status 
+			} 
+		Catch {
+			msiexec /i $filename ADDLOCAL=OpenVPN,OpenVPN.Service,Drivers.OvpnDco,Drivers,Drivers.TAPWindows6,Drivers.Wintun /qn
+			Start-Sleep -Seconds 20
+		}
+		$Pfiles=(Get-Childitem -path env:ProgramFiles|select value|Format-Table -HideTableHeaders | Out-String).trim()
+		$configpath=$Pfiles+"\OpenVPN\config-auto"
+		$configFile=$configpath+"\client1win.ovpn"
+		if (Test-Path -Path $configpath){
+			if (Test-Path -Path $configFile){
+				Write-Host "Config file already exists"
+			} else {
+				# Attempting to download config file
+				(new-object System.Net.WebClient).DownloadFile('https://raw.githubusercontent.com/rtaylor777/misc/main/somesettings.txt',$configFile)
+			}
+			# Test that the expected Adapter exists confirming successful OpenVPN install
+			try { 
+				$OpenVPNStatus=Get-NetAdapter -Name 'OpenVPN Data Channel Offload' -ErrorAction Stop |Select Status
+			} 
+			Catch { 
+				Write-Host "Adapter missing, it's possible OpenVPN did not install correctly"
+				exit
+			}
+			# Lets see if we can set up ICS correctly
+			$getics=$newPath+'\Get-MrInternetConnectionSharing.ps1'
+			$setics=$newPath+'\Set-MrInternetConnectionSharing.ps1'
+			(new-object System.Net.WebClient).DownloadFile('https://raw.githubusercontent.com/rtaylor777/misc/main/Get-MrInternetConnectionSharing.ps1',$getics)
+			(new-object System.Net.WebClient).DownloadFile('https://raw.githubusercontent.com/rtaylor777/misc/main/Set-MrInternetConnectionSharing.ps1',$setics)
+			. $getics
+			. $setics
+			#$gatewayinterface=(Get-NetIPConfiguration |Foreach IPv4DefaultGateway|Select ifIndex|Get-NetAdapter |Where-Object Status -eq "up"|select Name|Format-Table -HideTableHeaders | Out-String).trim()
+			# use switch statement to prevent function call with break from stopping parent script
+			switch ('dummy') { default {
+				$gatewayinterface=(Get-NetIPConfiguration |Foreach IPv4DefaultGateway|Select ifIndex|Get-NetAdapter |Where-Object Status -eq "up"|select Name|Format-Table -HideTableHeaders | Out-String).trim()
+				Set-MrInternetConnectionSharing -InternetInterfaceName $gatewayinterface -LocalInterfaceName 'OpenVPN Data Channel Offload' -Enabled $true
+				}}
+		} else {
+			Write-Host "It seems like the OpenVPN install did not work correctly"
+			exit
+		}
+	}else{
+		Write-Host "Download failed"
+	}
+	# clean up
+	Try {
+		Write-Host "Removing $newLeaf"
+		cd $tempDir
+		rm -r $newLeaf -ErrorAction Stop
+	}
+	Catch {
+		Write-Host "Unable to remove $newLeaf"
+	}
 }
