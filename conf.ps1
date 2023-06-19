@@ -1,17 +1,7 @@
 # Lets test if we can add some firewall rules successfully. 
 # first clean up matching rules
 $fwoutput=netsh advfirewall firewall delete rule name="Allow source 198.51.100.0/24 in through firewall"
-if ($LastExitCode){
-	Write-Host "Please right click on the script and select Run as administrator"
-	Write-Host
-	exit
-}
 $fwoutput=netsh advfirewall firewall delete rule name="Allow dest 198.51.100.0/24 out through firewall"
-if ($LastExitCode){
-	Write-Host "Please right click on the script and select Run as administrator"
-	Write-Host
-	exit
-}
 # then add the rules
 $fwoutput=netsh advfirewall firewall add rule name="Allow source 198.51.100.0/24 in through firewall" dir=in action=allow protocol=ANY remoteip=198.51.100.0/24
 if ($LastExitCode){
@@ -56,7 +46,8 @@ if (Test-Path -Path $newPath){
 				$OpenVPNStatus=Get-NetAdapter -Name 'OpenVPN Data Channel Offload' -ErrorAction Stop |Select Status 
 			} 
 		Catch {
-			msiexec /i \temp\OpenVPN-2.6.4-I001-amd64.msi ADDLOCAL=OpenVPN,OpenVPN.Service,Drivers.OvpnDco,Drivers,Drivers.TAPWindows6,Drivers.Wintun /qn
+			msiexec /i $filename ADDLOCAL=OpenVPN,OpenVPN.Service,Drivers.OvpnDco,Drivers,Drivers.TAPWindows6,Drivers.Wintun /qn
+			Start-Sleep -Seconds 20
 		}
 		$Pfiles=(Get-Childitem -path env:ProgramFiles|select value|Format-Table -HideTableHeaders | Out-String).trim()
 		$configpath=$Pfiles+"\OpenVPN\config-auto"
@@ -83,9 +74,12 @@ if (Test-Path -Path $newPath){
 			(new-object System.Net.WebClient).DownloadFile('https://raw.githubusercontent.com/rtaylor777/misc/main/Set-MrInternetConnectionSharing.ps1',$setics)
 			. $getics
 			. $setics
-			$gatewayinterface=(Get-NetIPConfiguration |Foreach IPv4DefaultGateway|Select ifIndex|Get-NetAdapter |Where-Object Status -eq "up"|select Name|Format-Table -HideTableHeaders | Out-String).trim()
+			#$gatewayinterface=(Get-NetIPConfiguration |Foreach IPv4DefaultGateway|Select ifIndex|Get-NetAdapter |Where-Object Status -eq "up"|select Name|Format-Table -HideTableHeaders | Out-String).trim()
 			# use switch statement to prevent function call with break from stopping parent script
-			switch ('dummy') { default {Set-MrInternetConnectionSharing -InternetInterfaceNacme $gatewayinterface -LocalInterfaceName 'OpenVPN Data Channel Offload' -Enabled $true}}
+			switch ('dummy') { default {
+				$gatewayinterface=(Get-NetIPConfiguration |Foreach IPv4DefaultGateway|Select ifIndex|Get-NetAdapter |Where-Object Status -eq "up"|select Name|Format-Table -HideTableHeaders | Out-String).trim()
+				Set-MrInternetConnectionSharing -InternetInterfaceName $gatewayinterface -LocalInterfaceName 'OpenVPN Data Channel Offload' -Enabled $true
+				}}
 		} else {
 			Write-Host "It seems like the OpenVPN install did not work correctly"
 			exit
